@@ -184,7 +184,13 @@ func (d *SQLDatabase) Find(ctx context.Context, results any, table string, colum
 		query.Offset(int(skip))
 	}
 
-	err := query.Scan(ctx, results)
+	var err error
+	if len(tables) > 1 && tables[0] == "[me]" {
+		err = query.Scan(ctx)
+	} else {
+		err = query.Scan(ctx, results)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -225,8 +231,13 @@ func (d *SQLDatabase) FindOne(ctx context.Context, result any, table string, col
 			query.Order(fmt.Sprintf("%s DESC", field))
 		}
 	}
+	query.Limit(1)
 
-	return query.Limit(1).Scan(ctx, result)
+	if len(tables) > 1 && tables[0] == "[me]" {
+		return query.Scan(ctx)
+	}
+
+	return query.Scan(ctx, result)
 }
 
 // InsertOne inserts a single record into a table
