@@ -198,6 +198,64 @@ func (d *SQLDatabase) Find(ctx context.Context, results any, table string, colum
 	return nil
 }
 
+// FindDeleted retrieves deleted (soft delete) records from a table with optional filtering, sorting, and pagination
+func (d *SQLDatabase) FindDeleted(ctx context.Context, results any, table string, column []string, filter []port.DbExpression, sort map[string]int, limit int64, skip int64) error {
+	query := d.DB.NewSelect()
+	tables := strings.Split(table, ",")
+	if tables[0] != "" {
+		if tables[0] == "[me]" {
+			query.Model(results)
+		} else {
+			query.Table(tables[0])
+		}
+	} else {
+		query.Model(results)
+	}
+
+	if len(tables) > 1 {
+		for _, t := range tables[1:] {
+			query.Relation(t)
+		}
+	}
+
+	if len(column) > 0 {
+		query.Column(column...)
+	}
+
+	buildWhereClause(d.Config.Driver, query.QueryBuilder(), filter, "")
+
+	for field, direction := range sort {
+		if direction > 0 {
+			query.Order(fmt.Sprintf("%s ASC", field))
+		} else {
+			query.Order(fmt.Sprintf("%s DESC", field))
+		}
+	}
+
+	if limit > 0 {
+		query.Limit(int(limit))
+	}
+
+	if skip > 0 {
+		query.Offset(int(skip))
+	}
+
+	query.WhereDeleted()
+
+	var err error
+	if len(tables) > 1 && tables[0] == "[me]" {
+		err = query.Scan(ctx)
+	} else {
+		err = query.Scan(ctx, results)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // FindOne retrieves a single record from a table
 func (d *SQLDatabase) FindOne(ctx context.Context, result any, table string, column []string, filter []port.DbExpression, sort map[string]int) error {
 	query := d.DB.NewSelect()
@@ -232,6 +290,48 @@ func (d *SQLDatabase) FindOne(ctx context.Context, result any, table string, col
 		}
 	}
 	query.Limit(1)
+
+	if len(tables) > 1 && tables[0] == "[me]" {
+		return query.Scan(ctx)
+	}
+
+	return query.Scan(ctx, result)
+}
+
+// Find One Deleted Row (soft delete)
+func (d *SQLDatabase) FindOneDeleted(ctx context.Context, result any, table string, column []string, filter []port.DbExpression, sort map[string]int) error {
+	query := d.DB.NewSelect()
+	tables := strings.Split(table, ",")
+	if tables[0] != "" {
+		if tables[0] == "[me]" {
+			query.Model(result)
+		} else {
+			query.Table(tables[0])
+		}
+	} else {
+		query.Model(result)
+	}
+
+	if len(tables) > 1 {
+		for _, t := range tables[1:] {
+			query.Relation(t)
+		}
+	}
+
+	if len(column) > 0 {
+		query.Column(column...)
+	}
+
+	buildWhereClause(d.Config.Driver, query.QueryBuilder(), filter, "")
+
+	for field, direction := range sort {
+		if direction > 0 {
+			query.Order(fmt.Sprintf("%s ASC", field))
+		} else {
+			query.Order(fmt.Sprintf("%s DESC", field))
+		}
+	}
+	query.WhereDeleted().Limit(1)
 
 	if len(tables) > 1 && tables[0] == "[me]" {
 		return query.Scan(ctx)
@@ -307,8 +407,18 @@ func (d *SQLDatabase) newUpdateQuery(table string, data any) *bun.UpdateQuery {
 }
 
 // Delete deletes records from a table with optional filtering
-func (d *SQLDatabase) Delete(ctx context.Context, table string, filter []port.DbExpression) (int64, error) {
-	query := d.DB.NewDelete().Table(table)
+func (d *SQLDatabase) Delete(ctx context.Context, table any, filter []port.DbExpression) (int64, error) {
+	query := d.DB.NewDelete()
+
+	switch reflect.TypeOf(table).Kind() {
+	case reflect.String:
+		strTable := reflect.ValueOf(table).String()
+		query.Table(strTable)
+	case reflect.Pointer, reflect.Struct:
+		query.Model(table)
+	default:
+		return 0, fmt.Errorf("Invalid table")
+	}
 
 	buildWhereClause(d.Config.Driver, query.QueryBuilder(), filter, "")
 
@@ -320,9 +430,21 @@ func (d *SQLDatabase) Delete(ctx context.Context, table string, filter []port.Db
 	return result.RowsAffected()
 }
 
-// DeleteOne deletes a single record from a table
-func (d *SQLDatabase) DeleteOne(ctx context.Context, table string, filter []port.DbExpression) (int64, error) {
-	query := d.DB.NewDelete().Table(table)
+// DeleteOne deletes a single record from a table if you pass Model(bun Entity) the function will perform soft delete if the entity has soft_delete tag
+// Soft delete not working if you pass table name even if the Model(bun Entity) has soft delete tag
+func (d *SQLDatabase) DeleteOne(ctx context.Context, table any, filter []port.DbExpression) (int64, error) {
+	query := d.DB.NewDelete()
+
+	switch reflect.TypeOf(table).Kind() {
+	case reflect.String:
+		strTable := reflect.ValueOf(table).String()
+		query.Table(strTable)
+	case reflect.Ptr, reflect.Struct:
+		query.Model(table)
+	default:
+		return 0, fmt.Errorf("Invalid table")
+
+	}
 
 	buildWhereClause(d.Config.Driver, query.QueryBuilder(), filter, "")
 
